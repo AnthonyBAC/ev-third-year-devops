@@ -1,33 +1,35 @@
 # Backend — EV. Devops
 
 Microservicios backend de la solución: dos APIs REST en **Spring Boot** (Ventas y
-Despachos) y una base de datos **MySQL 8**, todo contenerizado con Docker y
-desplegado de forma automatizada a una instancia **EC2** mediante GitHub Actions.
+Despachos), contenerizadas con Docker y desplegadas de forma automatizada a una
+instancia **EC2 privada** mediante GitHub Actions. La base de datos **MySQL 8**
+corre en su **propia EC2** (tier de datos), siguiendo una arquitectura **3-tier**.
 
-El frontend vive en su propio repositorio:
-`ev-third-year-devops-frontend`.
+Otros repos:
+- Frontend: `ev-third-year-devops-frontend`
+- Tier de datos (MySQL): se despliega en su EC2 dedicada (ver carpeta `db-tier`).
 
 ---
 
-## Arquitectura
+## Arquitectura (3-tier)
 
 ```
-                 EC2 Backend (subred privada, sin acceso desde Internet)
-   ┌───────────────────────────────────────────────────────────┐
-   │  docker compose                                            │
-   │                                                            │
-   │   back-ventas    :8080 ─┐                                  │
-   │   back-despachos :8081 ─┼──► mysql (red interna backend-net)│
-   │                         │     └─ volumen named: mysql-data │
-   └───────────────────────────────────────────────────────────┘
-            ▲ 8080 / 8081 (solo desde el Security Group del Frontend)
+   EC2 Frontend (pública/bastion)   EC2 Backend (privada)        EC2 DB (privada)
+   ┌──────────────┐                 ┌──────────────────┐         ┌──────────────┐
+   │  nginx :80   │  /api/v1/* ───► │  back-ventas :8080│  3306   │  MySQL       │
+   │  (bastion)   │                 │  back-despachos   │ ──────► │  + volumen   │
+   └──────────────┘                 │       :8081       │         │  mysql-data  │
+        ▲ único público             └──────────────────┘         └──────────────┘
+                                      ▲ deploy entra por el bastion (SSH proxy)
 ```
 
 - **back-ventas**: API REST de ventas, puerto `8080`, base `db_ventas`.
 - **back-despachos**: API REST de despachos, puerto `8081`, base `db_despachos`.
-- **mysql**: MySQL 8, persistencia en el volumen `mysql-data`.
-- Los tres contenedores se comunican por la red interna `backend-net`.
-- Solo el frontend (su Security Group) puede consumir los puertos 8080/8081.
+- **MySQL**: en su EC2 dedicada (privada); el backend la consume por `${DB_HOST}:3306`.
+- El backend está en **subred privada** (sin IP pública); el deploy entra vía SSH
+  usando el frontend como **bastion**, y el backend sale a internet por un **NAT Gateway**.
+- Solo el frontend es accesible desde Internet. El acceso a `8080/8081` (backend) y
+  `3306` (db) está restringido por Security Groups a la IP de quien corresponde.
 
 ---
 
@@ -37,8 +39,7 @@ El frontend vive en su propio repositorio:
 .
 ├── back-Ventas_SpringBoot/Springboot-API-REST/          # codigo + Dockerfile API Ventas
 ├── back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO/  # codigo + Dockerfile API Despachos
-├── docker-compose.yml      # levanta mysql + 2 APIs (local y EC2)
-├── init-db.sql             # crea DBs y permisos al primer arranque de MySQL
+├── docker-compose.yml      # levanta las 2 APIs (apuntan a la EC2 db por ${DB_HOST})
 ├── .env.example            # plantilla de variables para correr en local
 └── .github/workflows/deploy.yml   # pipeline CI/CD
 ```
@@ -64,15 +65,18 @@ para caber en la t3.micro.
 
 ## Persistencia de datos
 
+La persistencia vive en la **EC2 del tier de datos** (no en este backend). MySQL usa un
+**named volume** (`mysql-data`) montado en `/var/lib/mysql`, definido en el
+`docker-compose.yml` de la carpeta `db-tier`.
+
 | Aspecto | Decisión |
 |---|---|
 | Tipo de volumen | **Named volume** (`mysql-data`) |
-| Punto de montaje | `/var/lib/mysql` |
-| ¿Por qué named y no bind mount? | El named volume lo administra Docker, es portable entre instancias, no depende de rutas del host y sobrevive a `docker compose down` / recreación de contenedores. Un bind mount ataría los datos a una ruta específica del EC2 y complica permisos. |
+| ¿Por qué named y no bind mount? | Lo administra Docker, es portable, no depende de rutas del host y sobrevive a `docker compose down` / recreación del contenedor. Un bind mount ataría los datos a una ruta específica del EC2 y complica permisos. |
 
 Gracias al named volume, **los datos de MySQL no se pierden** al reiniciar o recrear
-el contenedor. El script `init-db.sql` solo corre cuando el volumen está vacío (primer
-arranque), creando las bases `db_ventas` y `db_despachos` y otorgando permisos a `appuser`.
+el contenedor. El script `init-db.sql` (en la EC2 db) solo corre cuando el volumen está
+vacío, creando `db_ventas` / `db_despachos` y otorgando permisos a `appuser`.
 
 ---
 
@@ -120,8 +124,9 @@ publicadas en Docker Hub (no compila en la instancia).
 | `DOCKER_TOKEN` | Token de acceso de Docker Hub |
 | `EC2_USER` | `ubuntu` |
 | `EC2_SSH_PRIVATE_KEY` | Clave privada SSH (`nuevo-front-backend.pem`) |
-| `EC2_HOST_BACKEND` | IP pública del EC2 backend |
-| `MYSQL_ROOT_PASSWORD` | Password root de MySQL |
+| `EC2_HOST_BACKEND` | IP **privada** del EC2 backend (se llega por el bastion) |
+| `BASTION_HOST` | IP pública del frontend, usado como bastion para el salto SSH |
+| `DB_HOST` | IP privada de la EC2 de datos (MySQL) |
 | `MYSQL_USER` | Usuario de aplicación (`appuser`) |
 | `MYSQL_PASSWORD` | Password del usuario de aplicación |
 

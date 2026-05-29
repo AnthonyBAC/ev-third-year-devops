@@ -66,7 +66,7 @@ jobs:
           proxy_username: ${{ secrets.EC2_USER }}
           proxy_key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           proxy_port: 22
-          source: "docker-compose.yml,init-db.sql"
+          source: "docker-compose.yml"
           target: "~/app-backend"
 
       - name: Levantar stack con docker compose (vía bastion frontend)
@@ -84,7 +84,7 @@ jobs:
           script_stop: true
           # Pasa los secrets al shell remoto para que docker compose
           # los sustituya en ${...} dentro del docker-compose.yml
-          envs: DOCKER_USERNAME,MYSQL_ROOT_PASSWORD,MYSQL_USER,MYSQL_PASSWORD
+          envs: DOCKER_USERNAME,DB_HOST,MYSQL_USER,MYSQL_PASSWORD
           script: |
             set -eu
             echo "Verificar docker compose v2"
@@ -120,6 +120,6 @@ jobs:
             docker compose ps
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
           MYSQL_USER: ${{ secrets.MYSQL_USER }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}

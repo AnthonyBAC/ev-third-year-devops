@@ -1,5 +1,6 @@
 # ─────────────────────────────────────────────────────────────
-# Stack backend: MySQL + 2 microservicios Spring Boot
+# Stack backend: SOLO las 2 APIs Spring Boot.
+# MySQL vive en su propia EC2 (tier de datos), se accede por ${DB_HOST}.
 #
 # Uso local (build desde codigo fuente):
 #   docker compose up -d --build
@@ -8,41 +9,11 @@
 #   docker compose pull && docker compose up -d
 #
 # Variables requeridas (ver .env.example):
-#   DOCKER_USERNAME, MYSQL_ROOT_PASSWORD, MYSQL_USER, MYSQL_PASSWORD
+#   DOCKER_USERNAME, DB_HOST, MYSQL_USER, MYSQL_PASSWORD
 # ─────────────────────────────────────────────────────────────
 services:
 
-  mysql:
-    image: mysql:8.0
-    container_name: mysql-db
-    restart: unless-stopped
-    # Tuning para t3.micro (1 GB RAM): buffer chico y sin performance_schema
-    command:
-      - --innodb-buffer-pool-size=128M
-      - --performance-schema=OFF
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-    volumes:
-      # Named volume: persiste los datos aunque se recree el contenedor
-      - mysql-data:/var/lib/mysql
-      # Script de init: crea las DBs y otorga permisos al primer arranque
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
-    networks:
-      - backend-net
-    # Limites de memoria para no tumbar la t3.micro
-    mem_limit: 450m
-    memswap_limit: 900m
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   back-ventas:
-    # En EC2 se usa esta imagen (docker compose pull la baja de Docker Hub).
-    # En local, 'docker compose up --build' la construye desde el contexto.
     image: ${DOCKER_USERNAME}/back-ventas:latest
     build:
       context: ./back-Ventas_SpringBoot/Springboot-API-REST
@@ -50,22 +21,18 @@ services:
     container_name: back-ventas
     restart: unless-stopped
     environment:
-      DB_ENDPOINT: mysql
+      DB_ENDPOINT: ${DB_HOST}
       DB_PORT: 3306
       DB_NAME: db_ventas
       DB_USERNAME: ${MYSQL_USER}
       DB_PASSWORD: ${MYSQL_PASSWORD}
       JAVA_TOOL_OPTIONS: "-Xmx256m -Xms128m -XX:+UseSerialGC"
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/db_ventas?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_URL: jdbc:mysql://${DB_HOST}:3306/db_ventas?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true
     ports:
       - "8080:8080"
-    networks:
-      - backend-net
-    mem_limit: 350m
-    memswap_limit: 700m
-    depends_on:
-      mysql:
-        condition: service_healthy
+    # El t3.micro del backend ya NO corre MySQL, asi que las JVM pueden usar mas RAM
+    mem_limit: 400m
+    memswap_limit: 800m
 
   back-despachos:
     image: ${DOCKER_USERNAME}/back-despachos:latest
@@ -75,27 +42,14 @@ services:
     container_name: back-despachos
     restart: unless-stopped
     environment:
-      DB_ENDPOINT: mysql
+      DB_ENDPOINT: ${DB_HOST}
       DB_PORT: 3306
       DB_NAME: db_despachos
       DB_USERNAME: ${MYSQL_USER}
       DB_PASSWORD: ${MYSQL_PASSWORD}
       JAVA_TOOL_OPTIONS: "-Xmx256m -Xms128m -XX:+UseSerialGC"
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/db_despachos?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_URL: jdbc:mysql://${DB_HOST}:3306/db_despachos?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true
     ports:
       - "8081:8081"
-    networks:
-      - backend-net
-    mem_limit: 350m
-    memswap_limit: 700m
-    depends_on:
-      mysql:
-        condition: service_healthy
-
-networks:
-  backend-net:
-    driver: bridge
-
-volumes:
-  mysql-data:
-    driver: local
+    mem_limit: 400m
+    memswap_limit: 800m
