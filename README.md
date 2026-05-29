@@ -5,9 +5,11 @@ Despachos), contenerizadas con Docker y desplegadas de forma automatizada a una
 instancia **EC2 privada** mediante GitHub Actions. La base de datos **MySQL 8**
 corre en su **propia EC2** (tier de datos), siguiendo una arquitectura **3-tier**.
 
-Otros repos:
-- Frontend: `ev-third-year-devops-frontend`
-- Tier de datos (MySQL): se despliega en su EC2 dedicada (ver carpeta `db-tier`).
+## Repositorios del proyecto (3-tier)
+
+- **Frontend:** https://github.com/AnthonyBAC/ev-third-year-devops-frontend
+- **Backend:** https://github.com/AnthonyBAC/ev-third-year-devops-backend
+- **Datos (DB):** https://github.com/AnthonyBAC/ev-third-year-devops-db
 
 ---
 
