@@ -1,4 +1,4 @@
-# Backend — Innovatech Chile (EP2 DevOps)
+# Backend — EV. Devops
 
 Microservicios backend de la solución: dos APIs REST en **Spring Boot** (Ventas y
 Despachos) y una base de datos **MySQL 8**, todo contenerizado con Docker y
