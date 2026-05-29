@@ -90,6 +90,15 @@ jobs:
             echo "Pull imagenes publicadas"
             docker compose pull
 
+            echo "Limpiar contenedores heredados del deploy anterior (docker run, sin compose)"
+            for c in mysql-db back-ventas back-despachos; do
+              proj=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$c" 2>/dev/null || true)
+              if [ -n "$(docker ps -aq -f name=^${c}$)" ] && [ -z "$proj" ]; then
+                echo "  removiendo contenedor legacy $c"
+                docker rm -f "$c" || true
+              fi
+            done
+
             echo "Levantar stack"
             docker compose up -d --remove-orphans
 
