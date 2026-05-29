@@ -118,7 +118,7 @@ publicadas en Docker Hub (no compila en la instancia).
 |---|---|
 | `DOCKER_USERNAME` | Usuario de Docker Hub |
 | `DOCKER_TOKEN` | Token de acceso de Docker Hub |
-| `EC2_USER` | Usuario SSH del EC2 (ej. `ubuntu`) |
+| `EC2_USER` | `ubuntu` |
 | `EC2_SSH_PRIVATE_KEY` | Clave privada SSH (`nuevo-front-backend.pem`) |
 | `EC2_HOST_BACKEND` | IP pública del EC2 backend |
 | `MYSQL_ROOT_PASSWORD` | Password root de MySQL |
