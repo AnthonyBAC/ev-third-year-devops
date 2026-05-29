@@ -129,6 +129,10 @@ publicadas en Docker Hub (no compila en la instancia).
 | `EC2_HOST_BACKEND` | IP **privada** del EC2 backend (se llega por el bastion) |
 | `BASTION_HOST` | IP pública del frontend, usado como bastion para el salto SSH |
 | `DB_HOST` | IP privada de la EC2 de datos (MySQL) |
+| `EC2_USER` | Usuario SSH del EC2 (ej. `ubuntu`) |
+| `EC2_SSH_PRIVATE_KEY` | Clave privada SSH (`nuevo-front-backend.pem`) |
+| `EC2_HOST_BACKEND` | IP pública del EC2 backend |
+| `MYSQL_ROOT_PASSWORD` | Password root de MySQL |
 | `MYSQL_USER` | Usuario de aplicación (`appuser`) |
 | `MYSQL_PASSWORD` | Password del usuario de aplicación |
 
