@@ -42,14 +42,28 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service.name }}:latest
             ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service.name }}:${{ github.sha }}
 
-  # ──────────────────────────
-  # Deploy a EC2 - Backend
-  # ──────────────────────────
+  # ──────────────────────────────────────────────────────────
+  # Deploy a EC2 Backend con docker compose
+  # 1) Copia docker-compose.yml + init-db.sql a la instancia
+  # 2) Hace docker compose pull + up -d (usa imagenes de Docker Hub)
+  # ──────────────────────────────────────────────────────────
   deploy-backend:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy en EC2 Backend
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Copiar compose + init-db a EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST_BACKEND }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          source: "docker-compose.yml,init-db.sql"
+          target: "~/app-backend"
+
+      - name: Levantar stack con docker compose
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST_BACKEND }}
@@ -58,90 +72,35 @@ jobs:
           timeout: 60s
           command_timeout: 15m
           script_stop: true
+          # Pasa los secrets al shell remoto para que docker compose
+          # los sustituya en ${...} dentro del docker-compose.yml
+          envs: DOCKER_USERNAME,MYSQL_ROOT_PASSWORD,MYSQL_USER,MYSQL_PASSWORD
           script: |
             set -eu
-            echo "Pre-cleanup (stopped containers + dangling images)"
+            echo "Verificar docker compose v2"
+            docker compose version
+
+            cd ~/app-backend
+
+            echo "Pre-cleanup"
             docker container prune -f || true
             docker image prune -f || true
             df -h /
-            echo "Pull backend images"
-            timeout 180 docker pull ${{ secrets.DOCKER_USERNAME }}/back-ventas:latest
-            timeout 180 docker pull ${{ secrets.DOCKER_USERNAME }}/back-despachos:latest
 
-            echo "Ensure backend network"
-            docker network inspect backend-net >/dev/null 2>&1 || docker network create backend-net
+            echo "Pull imagenes publicadas"
+            docker compose pull
 
-            if ! docker ps --format '{{.Names}}' | grep -qx mysql-db; then
-              echo "Start mysql-db"
-              docker rm -f mysql-db || true
-              docker run -d --name mysql-db \
-                --network backend-net \
-                --restart unless-stopped \
-                --memory=450m --memory-swap=900m \
-                -e MYSQL_ROOT_PASSWORD=${{ secrets.MYSQL_ROOT_PASSWORD }} \
-                -e MYSQL_USER=${{ secrets.MYSQL_USER }} \
-                -e MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
-                -v mysql-data:/var/lib/mysql \
-                mysql:8.0 \
-                --innodb-buffer-pool-size=128M \
-                --performance-schema=OFF
-            fi
+            echo "Levantar stack"
+            docker compose up -d --remove-orphans
 
-            echo "Wait for mysql-db"
-            i=0
-            until timeout 5 docker exec mysql-db mysqladmin ping -h 127.0.0.1 -u root -p${{ secrets.MYSQL_ROOT_PASSWORD }} --silent >/dev/null 2>&1; do
-              i=$((i + 1))
-              echo "Waiting for mysql-db ($i/60)"
-              if [ "$i" -ge 60 ]; then
-                echo "MySQL did not become ready in time"
-                echo "--- docker ps -a ---"
-                docker ps -a || true
-                echo "--- docker logs mysql-db (last 100 lines) ---"
-                docker logs --tail 100 mysql-db || true
-                exit 1
-              fi
-              sleep 3
-            done
-            echo "mysql-db is ready"
-
-            echo "Ensure databases exist and app user has privileges"
-            docker exec mysql-db mysql -u root -p${{ secrets.MYSQL_ROOT_PASSWORD }} -e "CREATE DATABASE IF NOT EXISTS db_ventas CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE DATABASE IF NOT EXISTS db_despachos CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON db_ventas.* TO '${{ secrets.MYSQL_USER }}'@'%'; GRANT ALL PRIVILEGES ON db_despachos.* TO '${{ secrets.MYSQL_USER }}'@'%'; FLUSH PRIVILEGES;"
-            echo "Databases ready"
-
-            echo "Replace back-ventas"
-            docker rm -f back-ventas || true
-            docker run -d --name back-ventas \
-              --network backend-net \
-              -p 8080:8080 \
-              --restart unless-stopped \
-              --memory=350m --memory-swap=700m \
-              -e JAVA_TOOL_OPTIONS="-Xmx256m -Xms128m -XX:+UseSerialGC" \
-              -e DB_ENDPOINT=mysql-db \
-              -e DB_PORT=3306 \
-              -e DB_NAME=db_ventas \
-              -e DB_USERNAME=${{ secrets.MYSQL_USER }} \
-              -e DB_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
-              -e SPRING_DATASOURCE_URL="jdbc:mysql://mysql-db:3306/db_ventas?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true" \
-              ${{ secrets.DOCKER_USERNAME }}/back-ventas:latest
-
-            echo "Replace back-despachos"
-            docker rm -f back-despachos || true
-            docker run -d --name back-despachos \
-              --network backend-net \
-              -p 8081:8081 \
-              --restart unless-stopped \
-              --memory=350m --memory-swap=700m \
-              -e JAVA_TOOL_OPTIONS="-Xmx256m -Xms128m -XX:+UseSerialGC" \
-              -e DB_ENDPOINT=mysql-db \
-              -e DB_PORT=3306 \
-              -e DB_NAME=db_despachos \
-              -e DB_USERNAME=${{ secrets.MYSQL_USER }} \
-              -e DB_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
-              -e SPRING_DATASOURCE_URL="jdbc:mysql://mysql-db:3306/db_despachos?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true" \
-              ${{ secrets.DOCKER_USERNAME }}/back-despachos:latest
-
-            echo "Post-cleanup (old unused images)"
+            echo "Post-cleanup (imagenes viejas sin uso)"
             docker image prune -af || true
             df -h /
-            echo "Backend deployed"
-            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+
+            echo "Estado del stack"
+            docker compose ps
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
