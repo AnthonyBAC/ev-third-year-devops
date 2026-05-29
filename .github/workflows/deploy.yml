@@ -1,0 +1,147 @@
+name: CI/CD - Build, Push & Deploy Backend
+
+on:
+  push:
+    branches:
+      - deploy
+
+jobs:
+  # ───────────────────────────────────────────
+  # Build y push de las 2 imagenes en paralelo
+  # ───────────────────────────────────────────
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - context: ./back-Ventas_SpringBoot/Springboot-API-REST
+            dockerfile: ./back-Ventas_SpringBoot/Springboot-API-REST/Dockerfile
+            name: back-ventas
+          - context: ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
+            dockerfile: ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO/Dockerfile
+            name: back-despachos
+
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Login en Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Build y push ${{ matrix.service.name }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service.name }}:latest
+            ${{ secrets.DOCKER_USERNAME }}/${{ matrix.service.name }}:${{ github.sha }}
+
+  # ──────────────────────────
+  # Deploy a EC2 - Backend
+  # ──────────────────────────
+  deploy-backend:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy en EC2 Backend
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST_BACKEND }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          timeout: 60s
+          command_timeout: 15m
+          script_stop: true
+          script: |
+            set -eu
+            echo "Pre-cleanup (stopped containers + dangling images)"
+            docker container prune -f || true
+            docker image prune -f || true
+            df -h /
+            echo "Pull backend images"
+            timeout 180 docker pull ${{ secrets.DOCKER_USERNAME }}/back-ventas:latest
+            timeout 180 docker pull ${{ secrets.DOCKER_USERNAME }}/back-despachos:latest
+
+            echo "Ensure backend network"
+            docker network inspect backend-net >/dev/null 2>&1 || docker network create backend-net
+
+            if ! docker ps --format '{{.Names}}' | grep -qx mysql-db; then
+              echo "Start mysql-db"
+              docker rm -f mysql-db || true
+              docker run -d --name mysql-db \
+                --network backend-net \
+                --restart unless-stopped \
+                --memory=450m --memory-swap=900m \
+                -e MYSQL_ROOT_PASSWORD=${{ secrets.MYSQL_ROOT_PASSWORD }} \
+                -e MYSQL_USER=${{ secrets.MYSQL_USER }} \
+                -e MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
+                -v mysql-data:/var/lib/mysql \
+                mysql:8.0 \
+                --innodb-buffer-pool-size=128M \
+                --performance-schema=OFF
+            fi
+
+            echo "Wait for mysql-db"
+            i=0
+            until timeout 5 docker exec mysql-db mysqladmin ping -h 127.0.0.1 -u root -p${{ secrets.MYSQL_ROOT_PASSWORD }} --silent >/dev/null 2>&1; do
+              i=$((i + 1))
+              echo "Waiting for mysql-db ($i/60)"
+              if [ "$i" -ge 60 ]; then
+                echo "MySQL did not become ready in time"
+                echo "--- docker ps -a ---"
+                docker ps -a || true
+                echo "--- docker logs mysql-db (last 100 lines) ---"
+                docker logs --tail 100 mysql-db || true
+                exit 1
+              fi
+              sleep 3
+            done
+            echo "mysql-db is ready"
+
+            echo "Ensure databases exist and app user has privileges"
+            docker exec mysql-db mysql -u root -p${{ secrets.MYSQL_ROOT_PASSWORD }} -e "CREATE DATABASE IF NOT EXISTS db_ventas CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE DATABASE IF NOT EXISTS db_despachos CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON db_ventas.* TO '${{ secrets.MYSQL_USER }}'@'%'; GRANT ALL PRIVILEGES ON db_despachos.* TO '${{ secrets.MYSQL_USER }}'@'%'; FLUSH PRIVILEGES;"
+            echo "Databases ready"
+
+            echo "Replace back-ventas"
+            docker rm -f back-ventas || true
+            docker run -d --name back-ventas \
+              --network backend-net \
+              -p 8080:8080 \
+              --restart unless-stopped \
+              --memory=350m --memory-swap=700m \
+              -e JAVA_TOOL_OPTIONS="-Xmx256m -Xms128m -XX:+UseSerialGC" \
+              -e DB_ENDPOINT=mysql-db \
+              -e DB_PORT=3306 \
+              -e DB_NAME=db_ventas \
+              -e DB_USERNAME=${{ secrets.MYSQL_USER }} \
+              -e DB_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
+              -e SPRING_DATASOURCE_URL="jdbc:mysql://mysql-db:3306/db_ventas?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true" \
+              ${{ secrets.DOCKER_USERNAME }}/back-ventas:latest
+
+            echo "Replace back-despachos"
+            docker rm -f back-despachos || true
+            docker run -d --name back-despachos \
+              --network backend-net \
+              -p 8081:8081 \
+              --restart unless-stopped \
+              --memory=350m --memory-swap=700m \
+              -e JAVA_TOOL_OPTIONS="-Xmx256m -Xms128m -XX:+UseSerialGC" \
+              -e DB_ENDPOINT=mysql-db \
+              -e DB_PORT=3306 \
+              -e DB_NAME=db_despachos \
+              -e DB_USERNAME=${{ secrets.MYSQL_USER }} \
+              -e DB_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
+              -e SPRING_DATASOURCE_URL="jdbc:mysql://mysql-db:3306/db_despachos?useSSL=false&serverTimezone=UTC&createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true" \
+              ${{ secrets.DOCKER_USERNAME }}/back-despachos:latest
+
+            echo "Post-cleanup (old unused images)"
+            docker image prune -af || true
+            df -h /
+            echo "Backend deployed"
+            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
