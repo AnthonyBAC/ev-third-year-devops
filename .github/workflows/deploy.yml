@@ -54,21 +54,31 @@ jobs:
       - name: Checkout repositorio
         uses: actions/checkout@v4
 
-      - name: Copiar compose + init-db a EC2
+      - name: Copiar compose + init-db a EC2 (vía bastion frontend)
         uses: appleboy/scp-action@v0.1.7
         with:
+          # host = IP PRIVADA del backend; se llega saltando por el bastion
           host: ${{ secrets.EC2_HOST_BACKEND }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          # Bastion = frontend (público). El runner entra aquí y salta al backend privado.
+          proxy_host: ${{ secrets.BASTION_HOST }}
+          proxy_username: ${{ secrets.EC2_USER }}
+          proxy_key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          proxy_port: 22
           source: "docker-compose.yml,init-db.sql"
           target: "~/app-backend"
 
-      - name: Levantar stack con docker compose
+      - name: Levantar stack con docker compose (vía bastion frontend)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST_BACKEND }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ secrets.BASTION_HOST }}
+          proxy_username: ${{ secrets.EC2_USER }}
+          proxy_key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          proxy_port: 22
           timeout: 60s
           command_timeout: 15m
           script_stop: true
