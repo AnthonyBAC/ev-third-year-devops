@@ -14,7 +14,7 @@
 services:
 
   back-ventas:
-    image: ${DOCKER_USERNAME}/back-ventas:latest
+    image: 211125593312.dkr.ecr.us-east-1.amazonaws.com/back-ventas:latest
     build:
       context: ./back-Ventas_SpringBoot/Springboot-API-REST
       dockerfile: Dockerfile
