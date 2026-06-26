@@ -35,7 +35,7 @@ services:
     memswap_limit: 800m
 
   back-despachos:
-    image: ${DOCKER_USERNAME}/back-despachos:latest
+    image: 211125593312.dkr.ecr.us-east-1.amazonaws.com/back-despachos:latest
     build:
       context: ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
       dockerfile: Dockerfile
